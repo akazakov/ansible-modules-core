@@ -553,10 +553,10 @@ except ImportError:
     HAS_BOTO = False
 
 
-def find_running_instances_by_count_tag(module, ec2, count_tag, zone=None):
+def find_running_instances_by_count_tag(module, ec2, vpc, count_tag, zone=None):
 
     # get reservations for instances that match tag(s) and are running
-    reservations = get_reservations(module, ec2, tags=count_tag, state="running", zone=zone)
+    reservations = get_reservations(module, ec2, vpc, tags=count_tag, state="running", zone=zone)
 
     instances = []
     for res in reservations:
@@ -577,10 +577,13 @@ def _set_none_to_blank(dictionary):
     return result
 
 
-def get_reservations(module, ec2, tags=None, state=None, zone=None):
+def get_reservations(module, ec2, vpc, tags=None, state=None, zone=None):
 
     # TODO: filters do not work with tags that have underscores
     filters = dict()
+    vpc_id = get_vpc_id(vpc, module.params.get('vpc_subnet_id'))
+    if vpc_id:
+        filters.update({'vpc-id': vpc_id})
 
     if tags is not None:
 
@@ -713,8 +716,8 @@ def create_block_device(module, ec2, volume):
     # http://aws.amazon.com/about-aws/whats-new/2013/10/09/ebs-provisioned-iops-maximum-iops-gb-ratio-increased-to-30-1/
     MAX_IOPS_TO_SIZE_RATIO = 30
 
-    # device_type has been used historically to represent volume_type, 
-    # however ec2_vol uses volume_type, as does the BlockDeviceType, so 
+    # device_type has been used historically to represent volume_type,
+    # however ec2_vol uses volume_type, as does the BlockDeviceType, so
     # we add handling for either/or but not both
     if all(key in volume for key in ['device_type','volume_type']):
         module.fail_json(msg = 'device_type is a deprecated name for volume_type. Do not use both device_type and volume_type')
@@ -769,7 +772,7 @@ def enforce_count(module, ec2, vpc):
     if exact_count and count_tag is None:
         module.fail_json(msg="you must use the 'count_tag' option with exact_count")
 
-    reservations, instances = find_running_instances_by_count_tag(module, ec2, count_tag, zone)
+    reservations, instances = find_running_instances_by_count_tag(module, ec2, vpc, count_tag, zone)
 
     changed = None
     checkmode = False
@@ -812,6 +815,16 @@ def enforce_count(module, ec2, vpc):
         all_instances.append(inst)
 
     return (all_instances, instance_dict_array, changed_instance_ids, changed)
+
+
+def get_vpc_id(vpc, vpc_subnet_id):
+    if not vpc:
+        module.fail_json(msg="region must be specified")
+
+    if vpc_subnet_id:
+        return vpc.get_all_subnets(subnet_ids=[vpc_subnet_id])[0].vpc_id
+    else:
+        return None
 
 
 def create_instances(module, ec2, vpc, override_count=None):
@@ -865,14 +878,7 @@ def create_instances(module, ec2, vpc, override_count=None):
     if group_id and group_name:
         module.fail_json(msg = str("Use only one type of parameter (group_name) or (group_id)"))
 
-    vpc_id = None
-    if vpc_subnet_id:
-        if not vpc:
-            module.fail_json(msg="region must be specified")
-        else:
-            vpc_id = vpc.get_all_subnets(subnet_ids=[vpc_subnet_id])[0].vpc_id
-    else:
-        vpc_id = None
+    vpc_id = get_vpc_id(vpc, vpc_subnet_id)
 
     try:
         # Here we try to lookup the group id from the security group name - if group is set.
